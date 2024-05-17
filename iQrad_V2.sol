@@ -13,6 +13,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
+// Interface for interacting with the iGold contract
 interface iGoldContract {
     function sell(uint256 _iGoldAmount) external returns(uint256);
     function calculateUSDTReceivedForIGold(uint256 _iGoldAmount) external returns (uint256);
@@ -20,10 +21,12 @@ interface iGoldContract {
     function depositeUSDT(uint256 _amount) external;
 }
 
-interface IBuyAndBurn{
+// Interface for the Buy and Burn mechanism
+interface IBuyAndBurn {
     function buyAndBurn(address, uint256) external returns(uint256);
 }
 
+// Interface for the PMM contract used for querying prices
 interface IPMMContract {
     enum RState {
         ONE,
@@ -42,20 +45,20 @@ interface IPMMContract {
         );
 }
 
-contract iQrad_V2 is Ownable,  ReentrancyGuard{
-    using SafeERC20 for IERC20;
+// Main contract for the iQrad V2 Loan System
+contract iQrad_V2 is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20; // Use SafeERC20 for secure token transfers
 
+    // Publicly accessible contract instances and variables
     IPMMContract public pmmContract = IPMMContract(0x14afbB9E6Ab4Ab761f067fA131e46760125301Fc);
     AggregatorV3Interface public goldPriceFeed = AggregatorV3Interface(0x0C466540B2ee1a31b441671eac0ca886e051E410);
 
     uint256 public constant oneMonth = 30 days;
 
     IBuyAndBurn public BAB = IBuyAndBurn(0xd73501d9111FF2DE47acBD52D2eAeaaA9e02b4Dd);
-    iGoldContract public iGoldc =
-        iGoldContract(0x9970CeD626BD512d0C6eF3ac5cc4634f1b417916);
+    iGoldContract public iGoldc = iGoldContract(0x9970CeD626BD512d0C6eF3ac5cc4634f1b417916);
 
     address public deadWallet = 0x000000000000000000000000000000000000dEaD;
-
     address public islamiToken = 0x9c891326Fd8b1a713974f73bb604677E1E63396D;
     address public iGoldToken = 0x9970CeD626BD512d0C6eF3ac5cc4634f1b417916;
     address public usdtToken = 0xc2132D05D31c914a87C6611C10748AEb04B58e8F;
@@ -100,12 +103,14 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
     uint256 private mUSDT = 1; // multiply by value
     uint256 private dUSDT = 100; // divide by value
 
+    // Enum for Loan Status
     enum LoanStatus {
         NONE,
         ACTIVE,
         DEFAULTED,
         CLOSED
     }
+    // Enum for Loan Tenure
     enum LoanTenure {
         NONE,
         ONE_MONTH,
@@ -114,6 +119,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         ONE_YEAR
     }
 
+    // Struct for Angel Investors
     struct AngelInvestor {
         uint256 vault;
         uint256 depositAmount;
@@ -122,17 +128,20 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         uint256 duration;
     }
 
+    // Struct for Investor Vaults
     struct InvestorVaults {
         address investor;
         AngelInvestor[] vaults;
     }
 
+    // Struct for selected vaults during loan allocation
     struct SelectedVault {
         address investorAddress;
         uint256 vaultId;
         uint256 amountAllocated;
     }
 
+    // Struct for vault contributions
     struct VaultContribution {
         address investorAddress;
         uint256 vaultId;
@@ -140,6 +149,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         uint256 contribution;
     }
 
+    // Struct for User information
     struct User {
         bool hasFile;
         uint256 collateral;
@@ -153,6 +163,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         uint256 paymentsLeft;
     }
 
+    // Struct for User Loan Info
     struct UserLoanInfo {
         address user;
         uint256 collateral;
@@ -163,6 +174,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         LoanTenure tenure;
     }
 
+    // Mappings for various data storage
     mapping(address => mapping(uint256 => AngelInvestor)) public angelInvestors;
     mapping(address => uint256) public nextVaultId;
     mapping(address => uint256) public vaultsCount;
@@ -172,6 +184,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
     mapping(address => bool) public hasLoan;
     mapping(address => bool) public hasInvestorFile;
 
+    // Events for logging actions
     event AngelInvestorDeposited(
         address indexed investor,
         uint256 vaultID,
@@ -185,7 +198,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
     event FileOpened(address indexed user);
     event CollateralDeposited(address indexed user, uint256 amount);
     event LoanTaken(address indexed user, uint256 amount);
-    event MonthlyPaymentMade(address indexed user, uint256 amount, uint256 payemtsDue);
+    event MonthlyPaymentMade(address indexed user, uint256 amount, uint256 paymentsDue);
     event LoanDefaulted(address indexed user, uint256 iGoldSold, uint256 paymentAmount, uint256 feePaid, uint256 paymentsDue);
     event LoanClosed(address indexed user);
     event LoanRepaid(address indexed user);
@@ -193,18 +206,20 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
     event AngelInvestorDurationExtended(address indexed investor, uint256 vaultID, uint256 newDuration);
     event TestingPeriodEnded();
 
+    // Modifier to check if the user has an open file
     modifier hasFile(address _user) {
         require(users[_user].hasFile, "File not opened");
         _;
     }
 
+    // Modifier to check if the user has an active loan
     modifier hasActiveLoan(address _user) {
         require(users[_user].status == LoanStatus.ACTIVE, "No active loan");
         _;
     }
 
-    constructor()Ownable(msg.sender) {
-    }
+    // Constructor to initialize the contract owner
+    constructor() Ownable(msg.sender) {}
 
     /* Testing Function */
     function endTesting() external onlyOwner {
@@ -214,95 +229,98 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
     }
     /* Testing Function */
 
-    function editLoanPercentageTenure (uint256 _1m, uint256 _3m, uint256 _6m, uint256 _1y) external onlyOwner{
+    // Function to edit loan percentage based on tenure
+    function editLoanPercentageTenure(uint256 _1m, uint256 _3m, uint256 _6m, uint256 _1y) external onlyOwner {
         mp1 = _1m;
         mp3 = _3m;
         mp6 = _6m;
         yp1 = _1y;
     }
 
-    function editMaxVaults(uint256 _max) external onlyOwner{
+    // Function to edit the maximum number of vaults
+    function editMaxVaults(uint256 _max) external onlyOwner {
         require(_max > 0, "At least 1 vault as max");
         maxVaults = _max;
     }
 
-    function editUSDTFee(uint256 _m, uint256 _d) external onlyOwner{
+    // Function to edit USDT fee parameters
+    function editUSDTFee(uint256 _m, uint256 _d) external onlyOwner {
         require(_m >= 1 && _d > 99, "Multiply equal or over 1 and divide over 99");
         mUSDT = _m;
         dUSDT = _d;
     }
 
-    function approveAll()external{
-        IERC20(islamiToken).approve(iGoldToken, type(uint256).max);
-        IERC20(usdtToken).approve(iGoldToken, type(uint256).max);
-        IERC20(usdtToken).approve(address(BAB), type(uint256).max);
+    // Function to approve all tokens for specific contracts
+    function approveAll() external {
+        IERC20(islamiToken).safeApprove(iGoldToken, type(uint256).max);
+        IERC20(usdtToken).safeApprove(iGoldToken, type(uint256).max);
+        IERC20(usdtToken).safeApprove(address(BAB), type(uint256).max);
     }
 
+    // Function to set the Buy and Burn contract address
     function setBabContractAddress(address _BAB) external onlyOwner {
         require(_BAB != address(0), "Zero Address");
         BAB = IBuyAndBurn(_BAB);
     }
 
-    function setBurnFee(uint256 _toBurn, uint256 _toFee) external onlyOwner{
+    // Function to set the burn fee percentages
+    function setBurnFee(uint256 _toBurn, uint256 _toFee) external onlyOwner {
         require(_toBurn + _toFee == 100, "Percentage error");
         toBurn = _toBurn;
         toFee = _toFee;
     }
 
-    function oneTimeFee() public view returns(uint256){
+    // Function to get the one-time file opening fee
+    function oneTimeFee() public view returns(uint256) {
         return getIslamiPrice(fileFee);
     }
 
-    function serviceFee() public view returns(uint256){
+    // Function to get the service fee for loans
+    function serviceFee() public view returns(uint256) {
         return getIslamiPrice(loanFee);
     }
 
-    function investorFee() public view returns(uint256){
-        if(isTesting){
-            return investorFile / 3;
-        }else{
-            return investorFile;
-        }
+    // Function to get the investor fee
+    function investorFee() public view returns(uint256) {
+        return isTesting ? investorFile / 3 : investorFile;
     }
 
-    function setISLAMIaddress(address _new) external onlyOwner{
+    // Function to set the ISLAMI token address
+    function setISLAMIaddress(address _new) external onlyOwner {
         require(_new != address(0),"Zero address");
         islamiToken = _new;
     }
 
-    function setiGoldAddress(address _new) external onlyOwner{
+    // Function to set the iGold token address
+    function setiGoldAddress(address _new) external onlyOwner {
         require(_new != address(0),"Zero address");
         iGoldToken = _new;
     }
 
-/* Start of Investor Functions */
+    /* Start of Investor Functions */
 
-
-    function depositAsAngelInvestor(uint256 amount, uint256 _duration)
-        external nonReentrant
-    {
-        if(isTesting){
+    // Function to deposit as an Angel Investor
+    function depositAsAngelInvestor(uint256 amount, uint256 _duration) external nonReentrant {
+        if(isTesting) {
             require(amount > testingMinLoanAmount, "Deposit amount must be greater than 0");
-        } else{
+        } else {
             require(amount > minLoanAmountDefault, "Deposit amount must be greater than minLoanAmount");
         }
-        require(_duration >= 9, "Deposite should be at least for 9 Months");
+        require(_duration >= 9, "Deposit should be at least for 9 Months");
 
-        if(!hasInvestorFile[msg.sender]){
+        if(!hasInvestorFile[msg.sender]) {
             IERC20(usdtToken).safeTransferFrom(msg.sender, address(this), investorFee());
             uint256 fee1 = investorFee() / 3;
-            uint256 fee2 = investorFee() - fee1 ;
+            uint256 fee2 = investorFee() - fee1;
             iGoldc.depositeUSDT(fee1);
             burnedISLAMI += BAB.buyAndBurn(usdtToken, fee2);
             hasInvestorFile[msg.sender] = true;
         }
 
-        if(nextVaultId[msg.sender] == 0){
+        if(nextVaultId[msg.sender] == 0) {
             nextVaultId[msg.sender] = 1;
         }
         uint256 vaultId = nextVaultId[msg.sender];
-        
-
         
         IERC20(usdtToken).safeTransferFrom(msg.sender, address(this), amount);
 
@@ -311,7 +329,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         investor.availableAmount += amount;
         investor.vault = vaultId; // Set the vault ID
         investor.depositTime = block.timestamp; // Set the deposit time
-        investor.duration = isTesting? (_duration * 300) + block.timestamp : (_duration * oneMonth) + block.timestamp;
+        investor.duration = isTesting ? (_duration * 300) + block.timestamp : (_duration * oneMonth) + block.timestamp;
 
         usdtVault += amount;
         nextVaultId[msg.sender]++; // Increment the vault ID for the next deposit
@@ -325,11 +343,8 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         emit AngelInvestorDeposited(msg.sender, vaultId, amount);
     }
 
-    function getInvestorVaults(address investor)
-        external
-        view
-        returns (AngelInvestor[] memory)
-    {
+    // Function to get the vaults of an investor
+    function getInvestorVaults(address investor) external view returns (AngelInvestor[] memory) {
         uint256 vaultCount = nextVaultId[investor];
 
         // First pass to count non-empty vaults
@@ -355,6 +370,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         return investorVaults;
     }
 
+    // Function to check if a vault is extendable
     function isExtendable(address investor, uint256 vaultId) public view returns (bool) {
         AngelInvestor memory investorVault = angelInvestors[investor][vaultId];
         // Calculate the remaining duration in seconds
@@ -365,7 +381,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         return remainingDuration < sixMonths;
     }
 
-
+    // Function to extend the duration of an Angel Investor deposit
     function extendAngelDeposit(uint256 vaultId, uint256 additionalDuration) external {
         require(vaultId < nextVaultId[msg.sender], "Invalid vault ID");
         AngelInvestor storage investor = angelInvestors[msg.sender][vaultId];
@@ -381,15 +397,16 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         }
 
         // Extend the duration
-        if(isTesting){
+        if(isTesting) {
             investor.duration += additionalDuration * 300; // Adjust for testing
-        } else{
+        } else {
             investor.duration += additionalDuration * oneMonth; // Adjust for production
         }
         
         emit AngelInvestorDurationExtended(msg.sender, vaultId, investor.duration);
     }
 
+    // Function to withdraw funds from an Angel Investor's vault
     function withdrawFromAngelInvestor(uint256 vaultId) external nonReentrant {
         require(vaultId < nextVaultId[msg.sender], "Invalid vault ID");
         AngelInvestor storage investor = angelInvestors[msg.sender][vaultId];
@@ -406,7 +423,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
             investor.depositTime = 0;
             investor.vault = 0;
             vaultsCount[msg.sender]--;
-            if(vaultsCount[msg.sender] == 0){
+            if(vaultsCount[msg.sender] == 0) {
                 removeInvestorIfNoVaults(msg.sender);
             }
         }
@@ -417,6 +434,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         emit AngelInvestorWithdrawn(msg.sender, vaultId, amount);
     }
 
+    // Function to fix investor vaults if available amounts exceed deposit amounts
     function fixInvestorVaults() public onlyOwner {
         // Iterate through each investor
         for (uint256 i = 0; i < investors.length; i++) {
@@ -435,6 +453,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         }
     }
 
+    // Function to fix the USDT vault balance
     function fixUsdtVault() public onlyOwner {
         uint256 totalAvailableInVaults = 0;
 
@@ -455,20 +474,20 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         usdtVault = totalAvailableInVaults;
 
         uint256 excessUSDT = IERC20(usdtToken).balanceOf(address(this)) - usdtVault;
-        if(excessUSDT > 0){
+        if(excessUSDT > 0) {
             IERC20(usdtToken).safeTransfer(defaultHandler, excessUSDT);
         }
     }
 
+    /* End of Investor Functions */
+    /****************************/
 
-/* End of Investor Functions */
-/****************************/
+    /* Start of User Functions */
 
-/* Start of User Functions */
-
+    // Function to request a loan
     function requestLoan(uint256 collateralAmount, LoanTenure tenure) external nonReentrant {
         // Step 1: Open File
-        if(!users[msg.sender].hasFile){
+        if(!users[msg.sender].hasFile) {
             _openFile(msg.sender);
         }
 
@@ -479,6 +498,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         _takeLoan(msg.sender, collateralAmount, tenure);
     }
 
+    // Internal function to open a file for a user
     function _openFile(address user) internal {
         uint256 _oneTimeFee = oneTimeFee();
         IERC20(islamiToken).safeTransferFrom(user, deadWallet, _oneTimeFee);
@@ -487,22 +507,16 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         emit FileOpened(user);
     }
 
-    function _depositCollateral(address user, uint256 amount)
-        internal
-        hasFile(user)
-    {
+    // Internal function to deposit collateral
+    function _depositCollateral(address user, uint256 amount) internal hasFile(user) {
         IERC20(iGoldToken).safeTransferFrom(user, address(this), amount);
         iGoldVault += amount;
         users[user].collateral += amount;
         emit CollateralDeposited(user, amount);
     }
 
-    function _takeLoan(
-        address user,
-        uint256 collateralAmount,
-        LoanTenure tenure
-    ) internal hasFile(user) {
-
+    // Internal function to take a loan
+    function _takeLoan(address user, uint256 collateralAmount, LoanTenure tenure) internal hasFile(user) {
         require(!hasLoan[user],"iQrad: User has loan already");
         uint256 tenureDuration = _getTenureDuration(tenure);
         require(tenureDuration > 0, "Invalid loan tenure");
@@ -529,22 +543,19 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
 
         // Select a vault from which to take the loan
         _selectVaultsForLoan(user, amount, tenure);
-    
 
         uint8 _tenure;
         if (tenure == LoanTenure.ONE_MONTH) {
-            _tenure = 1 ;
+            _tenure = 1;
         } else if (tenure == LoanTenure.THREE_MONTHS) {
-            _tenure = 3 ;
+            _tenure = 3;
         } else if (tenure == LoanTenure.SIX_MONTHS) {
-            _tenure = 6 ;
+            _tenure = 6;
         } else if (tenure == LoanTenure.ONE_YEAR) {
-            _tenure = 12 ;
+            _tenure = 12;
         }
 
         uint256 monthlyPayment = amount / _tenure;
-
-        
 
         usdtInLoans += amount;
         usdtVault -= amount;
@@ -552,7 +563,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         users[user].loanAmount = amount;
         users[user].monthlyPayment = monthlyPayment;
         users[user].lastPaymentTime = block.timestamp;
-        users[user].nextPaymentTime = isTesting? block.timestamp + 300 : block.timestamp + oneMonth;
+        users[user].nextPaymentTime = isTesting ? block.timestamp + 300 : block.timestamp + oneMonth;
         users[user].status = LoanStatus.ACTIVE;
         users[user].tenure = tenure;
         users[user].paymentsLeft = _tenure;
@@ -565,7 +576,8 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         IERC20(usdtToken).safeTransfer(user, amount);
     }
 
-    function getAvailableUSDTforLoans(LoanTenure tenure) public view returns(uint256, uint256) {
+    // Function to get available USDT for loans based on tenure
+    function getAvailableUSDTforLoans(LoanTenure tenure) public view returns (uint256, uint256) {
         uint256 tenureDuration = _getTenureDuration(tenure);
         require(tenureDuration > 0, "Invalid loan tenure");
 
@@ -588,6 +600,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         return (totalAvailable, eligibleCount);
     }
 
+    // Internal function to select vaults for loan allocation
     function _selectVaultsForLoan(address _user, uint256 loanAmount, LoanTenure tenure) internal {
         (uint256 totalAvailable, uint256 eligibleCount) = getAvailableUSDTforLoans(tenure);
         require(totalAvailable >= loanAmount, "Insufficient funds across eligible vaults");
@@ -643,13 +656,13 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         require(remainingAmount == 0, "Loan amount not fully allocated");  // Verify the entire loan amount is allocated
     }
 
-
+    // Utility function to get the minimum of two values
     function min(uint256 a, uint256 b) private pure returns (uint256) {
         return a < b ? a : b;
     }
 
-    function getUSDTAmountForLoan(uint256 _collateralAmount) public view returns (uint256 loanAmount){
-    
+    // Function to get the USDT amount for a given collateral amount
+    function getUSDTAmountForLoan(uint256 _collateralAmount) public view returns (uint256 loanAmount) {
         // Calculate the total value of the iGold collateral
         uint256 collateralValue = (_collateralAmount * uint256(getIGoldPrice())) / (1e8);
 
@@ -658,13 +671,15 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         uint256 onePercentFees = amount / 100;
         uint256 actualReturnAmount = amount - onePercentFees;
 
-        return(actualReturnAmount);
+        return actualReturnAmount;
     }
 
+    // Internal function to get the tenure duration in seconds
     function _getTenureDuration(LoanTenure tenure) internal view returns (uint256) {
         return _calculateNormalDuration(tenure);
     }
 
+    // Private function to calculate the normal duration for a given tenure
     function _calculateNormalDuration(LoanTenure tenure) private view returns (uint256) {
         if (tenure == LoanTenure.ONE_MONTH) {
             return isTesting ? 5 * 60 : oneMonth;
@@ -679,6 +694,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         }
     }
 
+    // Function to make a monthly payment
     function makeMonthlyPayment() external nonReentrant hasActiveLoan(msg.sender) {
         User storage user = users[msg.sender];
         (uint256 overduePayments, uint256 totalDue) = calculateOverduePayments(msg.sender);
@@ -706,14 +722,15 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
 
             emit MonthlyPaymentMade(msg.sender, users[msg.sender].monthlyPayment, overduePayments);
 
-            for(uint256 i = 0; i < overduePayments; i++) {
+            for (uint256 i = 0; i < overduePayments; i++) {
                 _updateVaults(msg.sender); // Update vaults for each overdue payment.
             }
         }
     }
 
-    function _toDefault(address _user) internal view returns(uint256, uint256, uint256){
-         // Get the current price of iGold in terms of USDT
+    // Internal function to calculate default parameters
+    function _toDefault(address _user) internal view returns (uint256, uint256, uint256) {
+        // Get the current price of iGold in terms of USDT
         uint256 _iGoldPrice = uint256(getIGoldPrice() / (1e2));
         require(_iGoldPrice > 0, "Invalid iGold price");
 
@@ -725,6 +742,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         return (overduePayments, totalDue, finalAmount);
     }
 
+    // Function to handle loan defaults
     function handleDefault(address _user) public nonReentrant hasActiveLoan(_user) {
         User storage user = users[_user];
 
@@ -735,11 +753,11 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         (uint256 overduePayments, uint256 totalDue, uint256 finalAmount) = _toDefault(_user);
         uint256 totaliGoldToSell = iGoldc.calculateIGoldReceivedForUSDT(finalAmount);
 
-        if(user.collateral < totaliGoldToSell){
+        if (user.collateral < totaliGoldToSell) {
             totaliGoldToSell = user.collateral;
         }
 
-        if(user.paymentsLeft == overduePayments){
+        if (user.paymentsLeft == overduePayments) {
             totalDue = user.loanAmount;
         }
 
@@ -765,7 +783,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
             repayInvestors(_user);
         } else {
             user.loanAmount -= totalDue;
-            for(uint256 i = 0; i < overduePayments; i++) {
+            for (uint256 i = 0; i < overduePayments; i++) {
                 _updateVaults(_user); // Adjust the vaults for each overdue payment.
             }
             user.lastPaymentTime = block.timestamp;
@@ -775,6 +793,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         emit LoanDefaulted(_user, totaliGoldToSell, totalDue, excessUSDT, overduePayments);
     }
 
+    // Internal function to update the next payment time for a user
     function updateNextPaymentTime(address _user) private {
         User storage user = users[_user];
         // Calculate the next payment time based on the current date and payment frequency
@@ -782,9 +801,10 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         user.nextPaymentTime = isTesting ? block.timestamp + 300 : user.loanStartDate + ((monthsSinceStart + 1) * oneMonth);
     }
 
+    // Internal function to repay investors after loan repayment
     function repayInvestors(address _user) private {
         SelectedVault[] storage vaults = selectedVaults[_user];
-        for(uint256 i = 0; i < vaults.length; i++){
+        for (uint256 i = 0; i < vaults.length; i++) {
             uint256 allocation = vaults[i].amountAllocated;
             angelInvestors[vaults[i].investorAddress][vaults[i].vaultId].availableAmount += allocation;
             vaults[i].amountAllocated -= allocation;
@@ -792,6 +812,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         closeLoan(_user);
     }
 
+    // Internal function to update vaults for each overdue payment
     function _updateVaults(address _user) private {
         User storage user = users[_user];
         SelectedVault[] storage vaults = selectedVaults[_user];
@@ -840,6 +861,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         }
     }
 
+    // Internal function to close a loan
     function closeLoan(address _user) internal hasActiveLoan(_user) {
         User storage user = users[_user];
 
@@ -876,10 +898,12 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         emit LoanClosed(_user);
     }
 
-    function repayLoan() public nonReentrant hasActiveLoan(msg.sender){
+    // Function to repay a loan
+    function repayLoan() public nonReentrant hasActiveLoan(msg.sender) {
         _repayLoan(msg.sender);
     }
 
+    // Internal function to repay a loan
     function _repayLoan(address _user) private {
         User storage user = users[_user];
         uint256 remainingLoan = user.loanAmount;
@@ -891,7 +915,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
 
         // Update investors vaults
         SelectedVault[] storage vaults = selectedVaults[_user];
-        for(uint256 i = 0; i < vaults.length; i++){
+        for (uint256 i = 0; i < vaults.length; i++) {
             uint256 allocation = vaults[i].amountAllocated;
             angelInvestors[vaults[i].investorAddress][vaults[i].vaultId].availableAmount += allocation;
             vaults[i].amountAllocated -= allocation;
@@ -922,38 +946,46 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         emit LoanRepaid(_user);
     }
 
+    // Function to update the file fee
     function updateFileFee(uint256 newFee) external onlyOwner {
         fileFee = newFee;
     }
 
+    // Function to update the investor fee
     function updateInvestorFee(uint256 newFee) external onlyOwner {
         investorFile = newFee;
     }
 
-    function iGoldBalance(address _user) public view returns(uint256 _balance){
+    // Function to get the iGold balance of a user
+    function iGoldBalance(address _user) public view returns (uint256 _balance) {
         _balance = IERC20(iGoldToken).balanceOf(address(_user));
         return _balance;
     }
 
-    function ISLAMIbalance(address _user) public view returns(uint256 _balance){
+    // Function to get the ISLAMI balance of a user
+    function ISLAMIbalance(address _user) public view returns (uint256 _balance) {
         _balance = IERC20(islamiToken).balanceOf(address(_user));
         return _balance;
     }
 
-    function usdtBalance(address _user) public view returns(uint256 _balance){
+    // Function to get the USDT balance of a user
+    function usdtBalance(address _user) public view returns (uint256 _balance) {
         _balance = IERC20(usdtToken).balanceOf(address(_user));
         return _balance;
     }
 
+    // Function to set the loan fee
     function setLoanFee(uint256 _newLoanFee) external onlyOwner {
         require(_newLoanFee > 0, "Loan fee must be greater than zero");
         loanFee = _newLoanFee;
     }
 
+    // Function to set the minimum loan amounts
     function setMinLoanAmounts(uint256 _default) external onlyOwner {
         minLoanAmountDefault = _default * (1e6);
     }
 
+    // Function to get all investors' vaults
     function getAllInvestorsVaults() external view returns (InvestorVaults[] memory) {
         InvestorVaults[] memory allInvestorVaults = new InvestorVaults[](investors.length);
 
@@ -987,6 +1019,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         return allInvestorVaults;
     }
 
+    // Function to get the dynamic maximum loan amount based on tenure
     function getDynamicMaxLoanAmount(LoanTenure tenure) public view returns (uint256) {
         (uint256 averageDeposit,) = getAvailableUSDTforLoans(tenure);
         
@@ -1003,6 +1036,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         }
     }
 
+    // Internal function to remove an investor if no vaults are present
     function removeInvestorIfNoVaults(address investor) internal {
         if (vaultsCount[investor] == 0) { // Assuming 0 or 1 indicates no active vaults
             // Find the investor in the investors array
@@ -1019,6 +1053,7 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         }
     }
 
+    // Internal function to remove an active loan user
     function _removeActiveLoanUser(address user) private {
         for (uint256 i = 0; i < activeLoanUsers.length; i++) {
             if (activeLoanUsers[i] == user) {
@@ -1029,7 +1064,8 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         }
     }
 
-    function checkAndHandleAllDefaults() external{
+    // Function to check and handle all defaults
+    function checkAndHandleAllDefaults() external {
         // Iterate over the array of users with active loans
         for (uint256 i = 0; i < activeLoanUsers.length; i++) {
             address user = activeLoanUsers[i];
@@ -1039,12 +1075,13 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         }
     }
 
-    function checkAllDefaults() public view returns(bool areDefaults){
+    // Function to check if there are any defaults
+    function checkAllDefaults() public view returns (bool areDefaults) {
         // Iterate over the array of users with active loans
         for (uint256 i = 0; i < activeLoanUsers.length; i++) {
             address user = activeLoanUsers[i];
             if (block.timestamp >= users[user].nextPaymentTime && users[user].status == LoanStatus.ACTIVE) {
-                return true; 
+                return true;
             }
         }
     }
@@ -1064,11 +1101,8 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         return false; // No payment is due
     }
 
-    function getIslamiPrice(uint256 payQuoteAmount)
-        public
-        view
-        returns (uint256 _price)
-    {
+    // Function to get the price of ISLAMI token
+    function getIslamiPrice(uint256 payQuoteAmount) public view returns (uint256 _price) {
         address trader = address(this);
         // Call the querySellQuote function from the PMMContract
         (uint256 receiveBaseAmount, , , ) = pmmContract.querySellQuote(
@@ -1079,38 +1113,44 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         return _price;
     }
 
+    // Function to get the latest gold price per ounce
     function getLatestGoldPriceOunce() public view returns (int256) {
         (, int256 pricePerOunce, , , ) = goldPriceFeed.latestRoundData();
         return pricePerOunce;
     }
 
+    // Function to get the latest gold price per gram
     function getLatestGoldPriceGram() public view returns (int256) {
         int256 pricePerGram = (getLatestGoldPriceOunce() * 1e8) / 3110347680; // Multiplied by 10^8 to handle decimals
 
         return pricePerGram;
     }
 
+    // Function to get the iGold price
     function getIGoldPrice() public view returns (int256) {
         int256 _iGoldPrice = (getLatestGoldPriceGram()) / 10;
         return _iGoldPrice;
     }
 
+    // Function to set the PMM contract address
     function setPMMContract(address _newPMMContract) external onlyOwner {
         require(_newPMMContract != address(0), "Invalid address.");
         pmmContract = IPMMContract(_newPMMContract);
     }
 
+    // Function to set the gold price feed address
     function setGoldPriceFeed(address _newGoldPriceFeed) external onlyOwner {
         require(_newGoldPriceFeed != address(0), "Invalid address.");
         goldPriceFeed = AggregatorV3Interface(_newGoldPriceFeed);
     }
 
-    function setLoanPercentage(uint256 _percentage) external onlyOwner{
+    // Function to set the loan percentage
+    function setLoanPercentage(uint256 _percentage) external onlyOwner {
         require(_percentage >= 50 && _percentage <= 70, "Can't set percentage lower than 50 or higher than 70");
         loanPercentage = _percentage;
     }
 
-    // Calculates the number of overdue payments and the total amount due.
+    // Function to calculate overdue payments and total due amount
     function calculateOverduePayments(address userAddress) public view returns (uint256 overduePayments, uint256 totalDue) {
         User storage user = users[userAddress];
         if (user.status != LoanStatus.ACTIVE) {
@@ -1122,14 +1162,14 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         uint256 paymentsMade = (user.lastPaymentTime - user.loanStartDate) / paymentInterval;
 
         overduePayments = paymentsSinceStart - paymentsMade;
-        if(overduePayments > user.paymentsLeft){
+        if (overduePayments > user.paymentsLeft) {
             overduePayments = user.paymentsLeft;
         }
         totalDue = overduePayments * user.monthlyPayment;
         return (overduePayments, totalDue);
     }
 
-    // Returns an array of all users' loans
+    // Function to get all users' loans
     function getAllUsersLoans() public view returns (UserLoanInfo[] memory) {
         UserLoanInfo[] memory loans = new UserLoanInfo[](activeLoanUsers.length);
         for (uint256 i = 0; i < activeLoanUsers.length; i++) {
@@ -1148,22 +1188,23 @@ contract iQrad_V2 is Ownable,  ReentrancyGuard{
         return loans;
     }
 
-    // Returns the selected vaults for a given user's loan
+    // Function to get selected vaults for a user's loan
     function getSelectedVaults(address _user) public view returns (SelectedVault[] memory) {
         return selectedVaults[_user];
     }
 
-    function getGracePeriod(address _user) public view returns(uint256){
+    // Function to get the grace period for a user
+    function getGracePeriod(address _user) public view returns (uint256) {
         User storage user = users[_user];
         // Calculate the end of the grace period
         return user.nextPaymentTime + (isTesting ? 1 minutes : 5 days);
     }
 
-    function clearDirt(address _token) external onlyOwner{
+    // Function to clear any dirt tokens in the contract
+    function clearDirt(address _token) external onlyOwner {
         uint256 amount = IERC20(_token).balanceOf(address(this));
         IERC20(_token).safeTransfer(deadWallet, amount);
     }
-
 }
 
                 /*********************************************************
